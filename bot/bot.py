@@ -125,6 +125,7 @@ async def process_analysis_geo(message: types.Message, state: FSMContext) -> Non
         "Шаг 2: Теперь отправьте **фотографию ракурса местности** "
         "для поиска ориентиров.",
         reply_markup=get_cancel_keyboard(),
+        parse_mode="Markdown",
     )
 
 

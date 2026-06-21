@@ -96,12 +96,13 @@ async def upload_example(photo: UploadFile = File(...)) -> UploadResponse:
 
 @app.post("/api/v1/train", response_model=TrainResponse)
 async def train(background_tasks: BackgroundTasks) -> TrainResponse:
-    job_id, images = training_manager.start()
+    images = training_manager.count_images()
     if images == 0:
         raise HTTPException(
             status_code=400,
             detail="No training examples found. Upload examples first.",
         )
+    job_id, images = training_manager.start()
     background_tasks.add_task(training_manager.run, job_id)
     return TrainResponse(
         status="started",
