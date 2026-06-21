@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .target_detector import TargetProfileTrainer
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,13 +64,26 @@ class TrainingManager:
                 detail="Scanning dataset and updating model weights.",
                 images=images,
             )
-            # Placeholder for the real training loop.
-            time.sleep(2)
+            trainer = TargetProfileTrainer(self.train_images_dir, self.models_dir)
+            target_stats = trainer.build()
+            time.sleep(1)
+            labeled = target_stats["labeled_targets"]
+            detail = (
+                f"Training finished on {images} example(s); "
+                f"learned buried-target profile from {labeled} marked target(s)."
+            )
+            if labeled == 0:
+                detail = (
+                    f"Training finished on {images} example(s), but no red-marked "
+                    "target points were found. Upload examples with a red circle "
+                    "around the buried point to improve the detector."
+                )
             self._write_status(
                 job_id=job_id,
                 state="completed",
-                detail=f"Training finished on {images} example(s).",
+                detail=detail,
                 images=images,
+                labeled_targets=labeled,
             )
             logger.info("Training job %s completed on %d images", job_id, images)
         except Exception as exc:  # pragma: no cover - defensive

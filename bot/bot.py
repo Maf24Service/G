@@ -167,12 +167,40 @@ async def process_analysis_photo(
             return
 
     visual_landmarks = result.get("visual_landmarks", [])
+    target_points = result.get("target_points", [])
     geo_pred = result.get("geo_prediction", {})
+    place_summary = result.get("place_summary")
 
     nparr = np.frombuffer(photo_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
+    for target in target_points:
+        x = int(target["center_x"])
+        y = int(target["center_y"])
+        radius = int(target["radius"])
+        conf = float(target["confidence"])
+        cv2.circle(img, (x, y), radius, (0, 0, 255), 5)
+        cv2.drawMarker(
+            img,
+            (x, y),
+            (0, 0, 255),
+            markerType=cv2.MARKER_CROSS,
+            markerSize=max(20, radius),
+            thickness=3,
+        )
+        cv2.putText(
+            img,
+            f"Buried target: {int(conf * 100)}%",
+            (max(0, x - radius), max(y - radius - 10, 25)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 255),
+            2,
+        )
+
     for landmark in visual_landmarks:
+        if str(landmark.get("label", "")).endswith("buried_target"):
+            continue
         box = landmark["box_pixels"]
         conf = landmark["confidence"]
         cv2.rectangle(img, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 4)
@@ -189,10 +217,19 @@ async def process_analysis_photo(
     _, img_encoded = cv2.imencode(".jpg", img)
     processed_photo_bytes = img_encoded.tobytes()
 
-    response_text = (
-        "📋 **Анализ завершен:**\n\n"
-        f"🧭 **Маршрут:** {geo_pred.get('action_required')}\n"
-    )
+    response_text = "📋 **Анализ завершен:**\n\n"
+    if target_points:
+        best = target_points[0]
+        response_text += (
+            "🎯 **Точка прикопа:** "
+            f"`x={best['center_x']}, y={best['center_y']}` "
+            f"({int(best['confidence'] * 100)}%)\n"
+        )
+    else:
+        response_text += "🎯 **Точка прикопа:** не найдена уверенно\n"
+    if place_summary:
+        response_text += f"🌿 **Контекст:** {place_summary}\n"
+    response_text += f"🧭 **Маршрут:** {geo_pred.get('action_required')}\n"
     if geo_pred.get("predicted_lat"):
         response_text += (
             "🎯 **Ожидаемая точка:** "
@@ -219,8 +256,9 @@ async def start_training_upload(
     await state.set_state(AppStates.waiting_for_training_photo)
     await message.answer(
         "📥 Режим сбора датасета.\n\n"
-        "Отправьте мне фотографию-пример (желательно с четким ориентиром "
-        "по центру). Файлы сохранятся в базу обучения на сервере.\n\n"
+        "Отправьте фото, где точка прикопа отмечена красным кругом "
+        "(можно стрелкой, но круг лучше). Я сохраню пример и при "
+        "переобучении извлеку координату цели.\n\n"
         "После окончания загрузки всех фото нажмите кнопку '❌ Отмена' "
         "для возврата.",
         reply_markup=get_cancel_keyboard(),

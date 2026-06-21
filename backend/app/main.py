@@ -8,23 +8,40 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from .config import get_settings
 from .detector import LandmarkDetector
 from .geolocator import predict_geo
+from .scene_classifier import SceneClassifier
 from .schemas import (
     AnalyzeResponse,
     GeoPrediction,
+    SceneTag,
+    TargetPoint,
     TrainResponse,
     TrainStatusResponse,
     UploadResponse,
     VisualLandmark,
 )
+from .target_detector import BuriedTargetDetector
 from .training import TrainingManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("spotter.backend")
 
 settings = get_settings()
-detector = LandmarkDetector(
-    weights=settings.detector_weights,
-    confidence_threshold=settings.confidence_threshold,
+target_detector = BuriedTargetDetector(
+    settings.models_dir,
+    confidence_threshold=settings.target_confidence_threshold,
+)
+detector = (
+    LandmarkDetector(
+        weights=settings.detector_weights,
+        confidence_threshold=settings.confidence_threshold,
+    )
+    if settings.enable_objects
+    else None
+)
+scene_classifier = (
+    SceneClassifier(settings.weights_cache_dir)
+    if settings.enable_scene
+    else None
 )
 training_manager = TrainingManager(settings.train_images_dir, settings.models_dir)
 
@@ -41,7 +58,12 @@ def _decode_image(raw: bytes) -> np.ndarray:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "detector_backend": detector.backend}
+    return {
+        "status": "ok",
+        "target_backend": target_detector.backend,
+        "detector_backend": detector.backend if detector else "disabled",
+        "scene_classifier": bool(scene_classifier and scene_classifier.available),
+    }
 
 
 @app.post("/api/v1/analyze", response_model=AnalyzeResponse)
@@ -58,24 +80,74 @@ async def analyze(
     image = _decode_image(raw)
     height, width = image.shape[:2]
 
-    detections = detector.detect(image)
+    target_candidates = target_detector.detect(image)
+    detections = target_candidates
+    if not detections and detector is not None:
+        detections = detector.detect(image)
     landmarks = [
         VisualLandmark(
             box_pixels=d.box_pixels, confidence=d.confidence, label=d.label
         )
         for d in detections
     ]
+    target_points = [
+        TargetPoint(
+            center_x=p.center_x,
+            center_y=p.center_y,
+            radius=p.radius,
+            confidence=p.confidence,
+            label=p.label,
+        )
+        for p in target_candidates
+    ]
     geo: GeoPrediction = predict_geo(
         latitude, longitude, accuracy, detections, width, height
     )
+
+    scene_tags: list[SceneTag] = []
+    if scene_classifier is not None:
+        scene_tags = [
+            SceneTag(label=t.label, confidence=round(t.confidence, 4))
+            for t in scene_classifier.classify(image)
+        ]
+    place_summary = _summarize_place(scene_tags, detections)
+
     logger.info(
-        "Analyzed image (%dx%d): %d landmark(s) via %s",
+        "Analyzed image (%dx%d): %d target(s), %d fallback landmark(s); scene=%s",
         width,
         height,
-        len(landmarks),
-        detector.backend,
+        len(target_points),
+        max(0, len(landmarks) - len(target_points)),
+        scene_tags[0].label if scene_tags else "n/a",
     )
-    return AnalyzeResponse(visual_landmarks=landmarks, geo_prediction=geo)
+    return AnalyzeResponse(
+        visual_landmarks=landmarks,
+        target_points=target_points,
+        geo_prediction=geo,
+        scene_tags=scene_tags,
+        place_summary=place_summary,
+    )
+
+
+def _summarize_place(
+    scene_tags: list[SceneTag], detections: list
+) -> str | None:
+    if not scene_tags and not detections:
+        return None
+    parts: list[str] = []
+    if scene_tags:
+        top = scene_tags[0]
+        scene_name = top.label.replace("_", " ").replace("/", " / ")
+        parts.append(f"Likely location: {scene_name} ({top.confidence:.0%})")
+    if detections:
+        labels: list[str] = []
+        for d in detections:
+            if d.label not in labels:
+                labels.append(d.label)
+            if len(labels) >= 5:
+                break
+        parts.append("Detected: " + ", ".join(labels))
+    return ". ".join(parts)
 
 
 @app.post("/api/v1/upload_example", response_model=UploadResponse)

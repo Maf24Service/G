@@ -55,14 +55,15 @@ def predict_geo(
     # Normalized horizontal offset in [-1, 1]; positive means landmark is right.
     offset = (center_x - frame_center) / frame_center
 
+    target = strongest.label or "landmark"
     if offset < -0.2:
-        direction = "Turn left and advance toward the landmark."
+        direction = f"Turn left and advance toward the {target}."
         bearing_deg = -45.0
     elif offset > 0.2:
-        direction = "Turn right and advance toward the landmark."
+        direction = f"Turn right and advance toward the {target}."
         bearing_deg = 45.0
     else:
-        direction = "Move straight ahead toward the landmark."
+        direction = f"Move straight ahead toward the {target}."
         bearing_deg = 0.0
 
     # Project a target ~25m ahead along the suggested bearing.

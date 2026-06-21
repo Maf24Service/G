@@ -21,18 +21,22 @@ class _Detection:
 
 
 class LandmarkDetector:
-    """Detects salient landmarks in an image.
+    """Detects objects / landmarks in an image.
 
-    Tries to load an Ultralytics YOLO model when weights are provided and the
-    package is installed; otherwise falls back to a dependency-light OpenCV
-    saliency heuristic so the service runs out of the box.
+    Prefers a real, pretrained open-source detector (Ultralytics YOLO, COCO
+    weights) which is downloaded automatically on first use. When the
+    ``ultralytics``/``torch`` stack is not installed it transparently falls back
+    to a dependency-light OpenCV saliency heuristic so the service still runs.
     """
 
     def __init__(
-        self, weights: str | None = None, confidence_threshold: float = 0.35
+        self,
+        weights: str | None = "yolo11n.pt",
+        confidence_threshold: float = 0.35,
     ) -> None:
         self.confidence_threshold = confidence_threshold
         self._yolo = None
+        self._weights = weights
         if weights:
             self._yolo = self._try_load_yolo(weights)
         self._saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
@@ -45,10 +49,11 @@ class LandmarkDetector:
             model = YOLO(weights)
             logger.info("Loaded YOLO detector from %s", weights)
             return model
-        except Exception as exc:  # pragma: no cover - optional dependency path
+        except Exception as exc:
             logger.warning(
                 "Could not load YOLO weights '%s' (%s). "
-                "Falling back to OpenCV heuristic detector.",
+                "Falling back to OpenCV heuristic detector. Install the ML "
+                "extras (pip install -r requirements-ml.txt) for real detection.",
                 weights,
                 exc,
             )
@@ -56,15 +61,19 @@ class LandmarkDetector:
 
     @property
     def backend(self) -> str:
-        return "yolo" if self._yolo is not None else "opencv-saliency"
+        if self._yolo is not None:
+            return f"yolo:{self._weights}"
+        return "opencv-saliency"
 
     def detect(self, image: np.ndarray) -> list[_Detection]:
         if self._yolo is not None:
             return self._detect_yolo(image)
         return self._detect_saliency(image)
 
-    def _detect_yolo(self, image: np.ndarray) -> list[_Detection]:  # pragma: no cover
-        results = self._yolo(image, verbose=False)
+    def _detect_yolo(self, image: np.ndarray) -> list[_Detection]:
+        results = self._yolo(
+            image, verbose=False, conf=self.confidence_threshold
+        )
         detections: list[_Detection] = []
         for result in results:
             names = result.names
@@ -77,6 +86,7 @@ class LandmarkDetector:
                 detections.append(
                     _Detection([x1, y1, x2, y2], conf, names.get(cls, "object"))
                 )
+        detections.sort(key=lambda d: d.confidence, reverse=True)
         return detections
 
     def _detect_saliency(self, image: np.ndarray) -> list[_Detection]:

@@ -12,6 +12,19 @@ class VisualLandmark(BaseModel):
     label: str = "landmark"
 
 
+class TargetPoint(BaseModel):
+    center_x: int
+    center_y: int
+    radius: int
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    label: str = "buried_target"
+
+
+class SceneTag(BaseModel):
+    label: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+
 class GeoPrediction(BaseModel):
     action_required: str
     predicted_lat: float | None = None
@@ -21,7 +34,10 @@ class GeoPrediction(BaseModel):
 
 class AnalyzeResponse(BaseModel):
     visual_landmarks: list[VisualLandmark]
+    target_points: list[TargetPoint] = Field(default_factory=list)
     geo_prediction: GeoPrediction
+    scene_tags: list[SceneTag] = Field(default_factory=list)
+    place_summary: str | None = None
 
 
 class UploadResponse(BaseModel):
@@ -40,3 +56,4 @@ class TrainStatusResponse(BaseModel):
     state: str
     detail: str
     images: int | None = None
+    labeled_targets: int | None = None
